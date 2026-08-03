@@ -1,20 +1,3 @@
-"""
-QuadrupedFaultEnv
-=================
-
-A Gymnasium environment wrapping a PyBullet quadruped (Laikago, 12 actuated DOF)
-for forward-locomotion RL, with a built-in fault-injection API.
-
-Phase 1 (this file): plain locomotion, no faults active (fault_prob=0).
-Phase 2+: pass a fault config to __init__ or call .trigger_fault(...) mid-episode
-to test recovery behavior.
-
-Usage:
-    env = QuadrupedFaultEnv(render=False)
-    obs, info = env.reset()
-    obs, reward, terminated, truncated, info = env.step(action)
-"""
-
 import numpy as np
 import pybullet as p
 import pybullet_data
@@ -47,28 +30,24 @@ class QuadrupedFaultEnv(gym.Env):
         self.num_joints = 0
         self.step_count = 0
 
-        # --- Fault injection state ---
+        # Fault injection state
         # active_fault is None or a dict: {"type": str, "joint": int, "severity": float, ...}
         self.active_fault = None
-        self._torque_scale = None      # per-joint torque multiplier, set on reset
-        self._joint_lock_angle = {}    # joint_id -> locked angle
+        self._torque_scale = None
+        self._joint_lock_angle = {}    
         self._sensor_noise_std = 0.0
-        self._sensor_bias = None       # per-joint-angle-reading bias vector
+        self._sensor_bias = None
         self._sensor_dropout_mask = None
         self._actuation_delay_steps = 0
         self._action_buffer = []
 
-        # 12 joint angles + 12 joint velocities + 4 base orientation (quaternion)
-        # + 3 base linear velocity + 3 base angular velocity = 34
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(12,), dtype=np.float32)
         obs_dim = 12 + 12 + 4 + 3 + 3
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
 
-    # ------------------------------------------------------------------
     # Core Gym API
-    # ------------------------------------------------------------------
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         p.resetSimulation(physicsClientId=self._client)
@@ -92,7 +71,7 @@ class QuadrupedFaultEnv(gym.Env):
         ]
         self.num_joints = len(self.joint_ids)
 
-        # reset fault state every episode unless caller re-applies one
+        # reset fault state every episode unless caller says so
         self.active_fault = None
         self._torque_scale = np.ones(self.num_joints, dtype=np.float32)
         self._joint_lock_angle = {}
@@ -102,7 +81,6 @@ class QuadrupedFaultEnv(gym.Env):
         self._actuation_delay_steps = 0
         self._action_buffer = []
 
-        # settle the robot for a few steps under position hold
         for _ in range(20):
             p.stepSimulation(physicsClientId=self._client)
 
@@ -113,7 +91,7 @@ class QuadrupedFaultEnv(gym.Env):
     def step(self, action):
         action = np.clip(action, -1.0, 1.0)
 
-        # actuation delay: push into buffer, pop delayed command
+        # actuation delay
         self._action_buffer.append(action)
         delay = self._actuation_delay_steps
         if len(self._action_buffer) > delay:
@@ -123,14 +101,13 @@ class QuadrupedFaultEnv(gym.Env):
 
         applied_action = self._apply_fault_to_action(applied_action)
 
-        max_torque = 20.0  # Nm, nominal per-joint limit for this robot class
+        max_torque = 20.0 
         for _ in range(self.action_repeat):
             for idx, joint_id in enumerate(self.joint_ids):
                 if joint_id in self._joint_lock_angle:
-                    # joint lock fault: hold a fixed position regardless of policy output
                     target = self._joint_lock_angle[joint_id]
                 else:
-                    target = float(applied_action[idx]) * 1.0  # action -> target angle (rad), scaled in a real setup
+                    target = float(applied_action[idx]) * 1.0 
 
                 torque_limit = max_torque * self._torque_scale[idx]
                 p.setJointMotorControl2(
@@ -154,9 +131,7 @@ class QuadrupedFaultEnv(gym.Env):
         if p.isConnected(physicsClientId=self._client):
             p.disconnect(physicsClientId=self._client)
 
-    # ------------------------------------------------------------------
-    # Fault injection API — call mid-episode to test recovery
-    # ------------------------------------------------------------------
+    # Fault injection API
     def trigger_fault(self, fault_type: str, joint: int = None, severity: float = 1.0):
         """
         fault_type: one of
@@ -197,12 +172,10 @@ class QuadrupedFaultEnv(gym.Env):
         self.active_fault = None
 
     def _apply_fault_to_action(self, action):
-        # placeholder hook if a fault should distort commanded actions directly
+        # placeholder hook
         return action
 
-    # ------------------------------------------------------------------
     # Observation / reward / termination
-    # ------------------------------------------------------------------
     def _get_obs(self):
         joint_angles = np.zeros(self.num_joints, dtype=np.float32)
         joint_velocities = np.zeros(self.num_joints, dtype=np.float32)
@@ -211,7 +184,6 @@ class QuadrupedFaultEnv(gym.Env):
             joint_angles[idx] = angle
             joint_velocities[idx] = vel
 
-        # apply sensor faults to the *observation* only (ground-truth physics is unaffected)
         if self._sensor_noise_std > 0:
             joint_angles = joint_angles + self.np_random.normal(0, self._sensor_noise_std, size=joint_angles.shape)
         joint_angles = joint_angles + self._sensor_bias
@@ -243,7 +215,7 @@ class QuadrupedFaultEnv(gym.Env):
         pos, orn = p.getBasePositionAndOrientation(self.robot_id, physicsClientId=self._client)
         roll, pitch, _ = p.getEulerFromQuaternion(orn)
         stability_penalty = -0.5 * (roll ** 2 + pitch ** 2)
-        height_penalty = -1.0 * max(0.0, 0.35 - pos[2])  # penalize crouching below a safe height
+        height_penalty = -1.0 * max(0.0, 0.35 - pos[2])
 
         reward = vel_reward + energy_penalty + stability_penalty + height_penalty
         info = {

@@ -1,14 +1,7 @@
-"""
-Phase 1 training script: base locomotion policy, no faults.
 
-Run:
-    python scripts/train_base_policy.py --timesteps 500000
+# This trains the base PPO via Stable-Baselines3on the QuadrupedFaultEnv with no faults active. 
+# The resulting policy is the "frozen base policy" that later scripts will subject to fault injection and residual adaptation.
 
-This trains PPO (Schulman et al., 2017) via Stable-Baselines3 (Raffin et al., 2021)
-on the QuadrupedFaultEnv (PyBullet / Coumans & Bai) with no faults active.
-The resulting policy is the "frozen base policy" that later scripts will
-subject to fault injection and residual adaptation.
-"""
 
 import argparse
 import os
@@ -52,7 +45,7 @@ def main():
         gae_lambda=0.95,
         clip_range=0.2,
         tensorboard_log=args.log_dir,
-        policy_kwargs=dict(net_arch=[128, 128]),  # small net — keeps CPU training fast
+        policy_kwargs=dict(net_arch=[128, 128]),  # keeps CPU training fast
     )
 
     checkpoint_callback = CheckpointCallback(

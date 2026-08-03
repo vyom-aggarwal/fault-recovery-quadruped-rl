@@ -1,12 +1,5 @@
-"""
-Sanity check — run this FIRST, before training anything.
+#This is just a small script I made so that I know it works
 
-Confirms the environment loads, steps, and resets correctly, and that
-fault injection doesn't crash the simulation. Takes a few seconds.
-
-Run:
-    python scripts/smoke_test.py
-"""
 import os
 import sys
 
@@ -25,7 +18,7 @@ def main():
 
     total_reward = 0.0
     for i in range(100):
-        action = env.action_space.sample() * 0.1  # small random actions
+        action = env.action_space.sample() * 0.1 
         obs, reward, terminated, truncated, info = env.step(action)
         total_reward += reward
         if i == 50:

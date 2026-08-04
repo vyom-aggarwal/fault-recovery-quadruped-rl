@@ -3,11 +3,11 @@ import pybullet as p
 import pybullet_data
 import gymnasium as gym
 from gymnasium import spaces
-
-
+ 
+ 
 class QuadrupedFaultEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 60}
-
+ 
     def __init__(
         self,
         render: bool = False,
@@ -20,43 +20,46 @@ class QuadrupedFaultEnv(gym.Env):
         self.target_velocity = target_velocity
         self.max_episode_steps = max_episode_steps
         self.action_repeat = action_repeat
-
+ 
         self._client = p.connect(p.GUI if render else p.DIRECT)
         p.setAdditionalSearchPath(pybullet_data.getDataPath(), physicsClientId=self._client)
-
+ 
+        self._standing_pose = [0.0, -0.7, 0.7] * 4
+        self._action_scale = 0.5 
+ 
         self.robot_id = None
         self.plane_id = None
         self.joint_ids = []
         self.num_joints = 0
         self.step_count = 0
-
-        # Fault injection state
-        # active_fault is None or a dict: {"type": str, "joint": int, "severity": float, ...}
+ 
         self.active_fault = None
         self._torque_scale = None
-        self._joint_lock_angle = {}    
+        self._joint_lock_angle = {}
         self._sensor_noise_std = 0.0
         self._sensor_bias = None
         self._sensor_dropout_mask = None
         self._actuation_delay_steps = 0
         self._action_buffer = []
-
+ 
+        # 12 joint angles + 12 joint velocities + 4 base orientation (quaternion)
+        # + 3 base linear velocity + 3 base angular velocity = 34
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(12,), dtype=np.float32)
         obs_dim = 12 + 12 + 4 + 3 + 3
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
-
+ 
     # Core Gym API
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         p.resetSimulation(physicsClientId=self._client)
         p.setGravity(0, 0, -9.81, physicsClientId=self._client)
         p.setTimeStep(1.0 / 240.0, physicsClientId=self._client)
-
+ 
         self.plane_id = p.loadURDF("plane.urdf", physicsClientId=self._client)
         start_pos = [0, 0, 0.48]
-        start_orn = p.getQuaternionFromEuler([0, 0, 0])
+        start_orn = [0, 0.5, 0.5, 0]
         self.robot_id = p.loadURDF(
             "laikago/laikago.urdf",
             start_pos,
@@ -64,14 +67,18 @@ class QuadrupedFaultEnv(gym.Env):
             physicsClientId=self._client,
             flags=p.URDF_USE_SELF_COLLISION,
         )
-
+ 
         self.joint_ids = [
             j for j in range(p.getNumJoints(self.robot_id, physicsClientId=self._client))
             if p.getJointInfo(self.robot_id, j, physicsClientId=self._client)[2] == p.JOINT_REVOLUTE
         ]
         self.num_joints = len(self.joint_ids)
-
-        # reset fault state every episode unless caller says so
+ 
+        # Snap directly to the standing pose (not zero) before letting physics run, so the robot starts from a valid stance rather than fighting its way there.
+        for idx, joint_id in enumerate(self.joint_ids):
+            p.resetJointState(self.robot_id, joint_id, self._standing_pose[idx], physicsClientId=self._client)
+ 
+        # reset fault state every episode unless caller re-applies one
         self.active_fault = None
         self._torque_scale = np.ones(self.num_joints, dtype=np.float32)
         self._joint_lock_angle = {}
@@ -80,35 +87,42 @@ class QuadrupedFaultEnv(gym.Env):
         self._sensor_dropout_mask = np.zeros(self.num_joints, dtype=bool)
         self._actuation_delay_steps = 0
         self._action_buffer = []
-
-        for _ in range(20):
+ 
+        # settle onto the standing pose under active position control (not free-fall)
+        for _ in range(60):
+            for idx, joint_id in enumerate(self.joint_ids):
+                p.setJointMotorControl2(
+                    self.robot_id, joint_id, p.POSITION_CONTROL,
+                    targetPosition=self._standing_pose[idx], force=20.0,
+                    physicsClientId=self._client,
+                )
             p.stepSimulation(physicsClientId=self._client)
-
+ 
         self.step_count = 0
         obs = self._get_obs()
         return obs, {}
-
+ 
     def step(self, action):
         action = np.clip(action, -1.0, 1.0)
-
-        # actuation delay
+ 
         self._action_buffer.append(action)
         delay = self._actuation_delay_steps
         if len(self._action_buffer) > delay:
             applied_action = self._action_buffer.pop(0)
         else:
             applied_action = np.zeros_like(action)
-
+ 
         applied_action = self._apply_fault_to_action(applied_action)
-
-        max_torque = 20.0 
+ 
+        max_torque = 20.0
         for _ in range(self.action_repeat):
             for idx, joint_id in enumerate(self.joint_ids):
                 if joint_id in self._joint_lock_angle:
+                    # joint lock fault
                     target = self._joint_lock_angle[joint_id]
                 else:
-                    target = float(applied_action[idx]) * 1.0 
-
+                    target = self._standing_pose[idx] + float(applied_action[idx]) * self._action_scale
+ 
                 torque_limit = max_torque * self._torque_scale[idx]
                 p.setJointMotorControl2(
                     self.robot_id,
@@ -119,19 +133,21 @@ class QuadrupedFaultEnv(gym.Env):
                     physicsClientId=self._client,
                 )
             p.stepSimulation(physicsClientId=self._client)
-
+ 
         self.step_count += 1
         obs = self._get_obs()
         reward, info = self._compute_reward()
         terminated = self._check_fallen()
+        if terminated:
+            reward -= 10.0  # explicit fall penalty
         truncated = self.step_count >= self.max_episode_steps
         return obs, reward, terminated, truncated, info
-
+ 
     def close(self):
         if p.isConnected(physicsClientId=self._client):
             p.disconnect(physicsClientId=self._client)
-
-    # Fault injection API
+ 
+    # Fault injection API — call mid-episode to test recovery
     def trigger_fault(self, fault_type: str, joint: int = None, severity: float = 1.0):
         """
         fault_type: one of
@@ -145,7 +161,7 @@ class QuadrupedFaultEnv(gym.Env):
         """
         if joint is None and fault_type in ("torque_limit", "joint_lock", "sensor_dropout"):
             joint = self.np_random.integers(0, self.num_joints)
-
+ 
         if fault_type == "torque_limit":
             self._torque_scale[joint] = severity
         elif fault_type == "joint_lock":
@@ -159,9 +175,9 @@ class QuadrupedFaultEnv(gym.Env):
             self._sensor_noise_std = severity
         else:
             raise ValueError(f"Unknown fault_type: {fault_type}")
-
+ 
         self.active_fault = {"type": fault_type, "joint": joint, "severity": severity}
-
+ 
     def clear_faults(self):
         self._torque_scale[:] = 1.0
         self._joint_lock_angle = {}
@@ -170,11 +186,11 @@ class QuadrupedFaultEnv(gym.Env):
         self._sensor_dropout_mask[:] = False
         self._actuation_delay_steps = 0
         self.active_fault = None
-
+ 
     def _apply_fault_to_action(self, action):
-        # placeholder hook
+        # placeholder hook 
         return action
-
+ 
     # Observation / reward / termination
     def _get_obs(self):
         joint_angles = np.zeros(self.num_joints, dtype=np.float32)
@@ -188,10 +204,10 @@ class QuadrupedFaultEnv(gym.Env):
             joint_angles = joint_angles + self.np_random.normal(0, self._sensor_noise_std, size=joint_angles.shape)
         joint_angles = joint_angles + self._sensor_bias
         joint_angles[self._sensor_dropout_mask] = 0.0
-
+ 
         pos, orn = p.getBasePositionAndOrientation(self.robot_id, physicsClientId=self._client)
         lin_vel, ang_vel = p.getBaseVelocity(self.robot_id, physicsClientId=self._client)
-
+ 
         obs = np.concatenate([
             joint_angles,
             joint_velocities,
@@ -200,35 +216,48 @@ class QuadrupedFaultEnv(gym.Env):
             np.array(ang_vel, dtype=np.float32),
         ]).astype(np.float32)
         return obs
-
+ 
+    def _get_orientation_frame(self, orn):
+        rot_matrix = np.array(p.getMatrixFromQuaternion(orn)).reshape(3, 3)
+        up_axis_world = rot_matrix[:, 1]
+        forward_axis_world = rot_matrix[:, 2]
+        return up_axis_world, forward_axis_world
+ 
     def _compute_reward(self):
+        pos, orn = p.getBasePositionAndOrientation(self.robot_id, physicsClientId=self._client)
         lin_vel, _ = p.getBaseVelocity(self.robot_id, physicsClientId=self._client)
-        forward_vel = lin_vel[0]
+        up_axis, forward_axis = self._get_orientation_frame(orn)
+ 
+        forward_vel = float(np.dot(lin_vel, forward_axis))
         vel_reward = -abs(forward_vel - self.target_velocity)
-
+ 
         torque_penalty = 0.0
         for joint_id in self.joint_ids:
             _, _, _, applied_torque = p.getJointState(self.robot_id, joint_id, physicsClientId=self._client)
             torque_penalty += applied_torque ** 2
         energy_penalty = -1e-4 * torque_penalty
-
-        pos, orn = p.getBasePositionAndOrientation(self.robot_id, physicsClientId=self._client)
-        roll, pitch, _ = p.getEulerFromQuaternion(orn)
-        stability_penalty = -0.5 * (roll ** 2 + pitch ** 2)
-        height_penalty = -1.0 * max(0.0, 0.35 - pos[2])
-
-        reward = vel_reward + energy_penalty + stability_penalty + height_penalty
+ 
+        upright_alignment = float(up_axis[2])
+        stability_penalty = -1.0 * (1.0 - upright_alignment) ** 2
+        height_penalty = -1.0 * max(0.0, 0.50 - pos[2])  # penalize crouching 
+ 
+        alive_bonus = 1.0
+ 
+        reward = vel_reward + energy_penalty + stability_penalty + height_penalty + alive_bonus
         info = {
             "forward_vel": forward_vel,
             "vel_reward": vel_reward,
             "energy_penalty": energy_penalty,
             "stability_penalty": stability_penalty,
             "height": pos[2],
+            "upright_alignment": upright_alignment,
         }
         return reward, info
-
+ 
     def _check_fallen(self):
         pos, orn = p.getBasePositionAndOrientation(self.robot_id, physicsClientId=self._client)
-        roll, pitch, _ = p.getEulerFromQuaternion(orn)
-        fallen = pos[2] < 0.25 or abs(roll) > 1.0 or abs(pitch) > 1.0
+        up_axis, _ = self._get_orientation_frame(orn)
+        upright_alignment = up_axis[2]
+        # fallen if too low or tipped more than ~60 degrees from vertical
+        fallen = pos[2] < 0.35 or upright_alignment < 0.5
         return fallen

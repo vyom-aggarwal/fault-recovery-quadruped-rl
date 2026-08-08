@@ -232,10 +232,12 @@ class QuadrupedFaultEnv(gym.Env):
         vel_reward = -abs(forward_vel - self.target_velocity)
  
         torque_penalty = 0.0
+        max_t = getattr(self, "max_torque", 20.0)
         for joint_id in self.joint_ids:
             _, _, _, applied_torque = p.getJointState(self.robot_id, joint_id, physicsClientId=self._client)
-            torque_penalty += applied_torque ** 2
-        energy_penalty = -1e-4 * torque_penalty
+            normalized_torque = applied_torque / max_t if max_t > 0 else 0.0
+            torque_penalty += normalized_torque ** 2
+        energy_penalty = -0.03 * torque_penalty
  
         upright_alignment = float(up_axis[2])
         stability_penalty = -1.0 * (1.0 - upright_alignment) ** 2

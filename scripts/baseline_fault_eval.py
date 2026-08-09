@@ -31,13 +31,13 @@ def run_trial(model, env, fault_config, seed):
         obs, reward, terminated, truncated, info = env.step(action)
         pre_fault_vels.append(info["forward_vel"])
         if terminated or truncated:
-            return None  # fell before the fault was even injected; discard this trial
+            return None  # fell before the fault was even injected
     baseline_vel = np.mean(pre_fault_vels[-50:])  # settled walking speed just before the fault
  
     env.trigger_fault(fault_config["type"], severity=fault_config["severity"])
  
     post_fault_start_pos = None
-    recovery_time = None  # None = never recovered within the window
+    recovery_time = None  # never recovered within the window
     fell = False
     distance_start = None
  

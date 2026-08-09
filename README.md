@@ -19,3 +19,68 @@ I inject faults mid-run, at randomized onset times, drawn from at least these ca
  - **Sensor bias/noise** - a joint-angle or IMU reading corrupted with drift or added noise
   
 A subset of these categories, or specific severity levels within a category, is held out exclusively for the generalization test in Hypothesis 3. The adaptation module never sees them during its own training.  
+
+## How to Use This
+### Clone the Repo
+Clone this repository by running this command in your terminal
+```bash
+git clone https://github.com/vyom-aggarwal/fault-recovery-quadruped-rl
+``` 
+You should then see the repository in whichever directory your terminal was in. 
+### Setup
+Just ```cd``` into your repository and run this command.
+```bash
+python3 -m venv venv
+source venv/bin/activate        # on Windows: venv\Scripts\activate
+
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+pip install pybullet stable-baselines3 gymnasium
+```
+
+`pybullet` compiles a C++ physics core on install, meaning that the first `pip install`
+can take several minutes, which is completely normal.  
+
+### Quick Sanity Check
+Run this script to test whether or not your computer has downloaded all the necessary prerequisite libraries to run this project.
+
+```bash
+python scripts/smoke_test.py
+```
+
+Expected output: observation/action shapes, joint count, and a confirmation
+that a mid-episode fault injection doesn't crash the sim.  
+
+## How the Scripts Work
+
+### Mental Model
+Exactly one file contains the real quadruped logic: `envs/quadruped_env.py`. Everything in
+`scripts/` is a thin driver that imports it and does one job.
+
+```
+                      envs/quadruped_env.py
+                 (physics + reward + fault injection)
+                                |
+     +-------------+------------+------------+--------------+
+     |             |            |            |              |
+smoke_test   check_reset   train_base   evaluate_    diagnose_gait
+             _pose         _policy      policy       baseline_fault_eval
+     |             |            |            |              |
+"does it     "is the      "learn to    "watch it    "is it REALLY
+ run?"        pose sane?"  walk"        walk"        walking / how
+                                                     does it fail?"
+```
+
+Dependencies point one way only. Scripts import the environment; the
+environment imports nothing from scripts.
+### Run order
+```
+1. smoke_test.py           verify the env doesn't crash     (seconds)
+2. check_reset_pose.py     verify the start pose            (seconds)
+3. train_base_policy.py    produce models/base_policy.zip   (30-60 min)
+4. evaluate_policy.py      watch it — does it look alive?   (seconds)
+5. diagnose_gait.py        prove numerically it's walking   (seconds)
+6. baseline_fault_eval.py  produce Baseline A data          (minutes)
+```
+
+Steps 1-2 are cheap and catch expensive mistakes. Never skip them.

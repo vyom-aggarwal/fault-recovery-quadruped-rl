@@ -1,21 +1,22 @@
 import argparse
 import os
 import sys
-
+ 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+ 
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.utils import set_random_seed
-
+from stable_baselines3.common.logger import configure
+ 
 from envs.quadruped_env import QuadrupedFaultEnv
-
-
+ 
+ 
 def make_env():
     return QuadrupedFaultEnv(render=False)
-
-
+ 
+ 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--timesteps", type=int, default=500_000)
@@ -24,26 +25,35 @@ def main():
     parser.add_argument("--log_dir", type=str, default="logs/base_policy")
     parser.add_argument("--ent_coef", type=float, default=0.01,
                         help="Entropy bonus coefficient; higher values encourage more exploration")
+    parser.add_argument("--log_format", type=str, default="csv",
+                        choices=["csv", "tensorboard", "none"],
+                        help="csv (default) writes progress.csv -- robust, and directly "
+                             "plottable for learning-curve figures. tensorboard uses an "
+                             "async writer thread that has proven fragile on Windows "
+                             "(it can die mid-run and take training down with it).")
     parser.add_argument("--seed", type=int, default=0,
                         help="Random seed. Set explicitly for every run -- results are not "
                              "comparable across runs without it.")
     args = parser.parse_args()
-
+ 
+    # Seed everything reachable: python random, numpy, torch (CPU+CUDA).
     set_random_seed(args.seed)
-
+ 
     os.makedirs(os.path.dirname(args.save_path) or ".", exist_ok=True)
     os.makedirs(args.log_dir, exist_ok=True)
-
+ 
+    # Guard against silently destroying a good policy by retraining over it.
     if os.path.exists(args.save_path + ".zip"):
         print(f"WARNING: {args.save_path}.zip already exists and will be OVERWRITTEN "
               f"when this run finishes. Ctrl+C now and pass a different --save_path "
               f"if you meant to keep it.")
-
+ 
     print(f"Training with seed={args.seed}, timesteps={args.timesteps}, "
           f"n_envs={args.n_envs}, ent_coef={args.ent_coef}")
-    
+ 
+    # seed= here gives each parallel env a distinct but deterministic sub-seed
     vec_env = make_vec_env(make_env, n_envs=args.n_envs, seed=args.seed)
-
+ 
     model = PPO(
         "MlpPolicy",
         vec_env,
@@ -57,20 +67,26 @@ def main():
         clip_range=0.2,
         ent_coef=args.ent_coef,
         seed=args.seed,
-        tensorboard_log=args.log_dir,
         policy_kwargs=dict(net_arch=[128, 128]),
     )
-
+ 
+    if args.log_format == "csv":
+        model.set_logger(configure(args.log_dir, ["stdout", "csv"]))
+        print(f"Logging to {os.path.join(args.log_dir, 'progress.csv')}")
+    elif args.log_format == "tensorboard":
+        model.set_logger(configure(args.log_dir, ["stdout", "tensorboard"]))
+    # "none" -> keep SB3's default stdout-only logger
+ 
     checkpoint_callback = CheckpointCallback(
         save_freq=max(50_000 // args.n_envs, 1),
         save_path=os.path.dirname(args.save_path) or ".",
         name_prefix=os.path.basename(args.save_path) + "_ckpt",
     )
-
+ 
     model.learn(total_timesteps=args.timesteps, callback=checkpoint_callback, progress_bar=True)
     model.save(args.save_path)
     print(f"Saved base policy to {args.save_path}.zip (seed={args.seed})")
-
-
+ 
+ 
 if __name__ == "__main__":
     main()

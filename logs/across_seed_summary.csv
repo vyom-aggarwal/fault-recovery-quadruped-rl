@@ -1,0 +1,6 @@
+fault_type,n_seeds,recovery_rate_mean,recovery_rate_sd,fall_rate_mean,fall_rate_sd,recovery_time_mean_s,recovery_time_sd_s,post_fault_distance_mean_m,post_fault_distance_sd_m,per_seed_recovery_rates
+actuation_delay,4,1.0,0.0,0.0,0.0,0.05,0.0892,1.6382,0.0977,1.0000|1.0000|1.0000|1.0000
+joint_lock,4,1.0,0.0,0.0,0.0,0.1615,0.2584,2.2659,0.2617,1.0000|1.0000|1.0000|1.0000
+sensor_dropout,4,1.0,0.0,0.0,0.0,0.047,0.0581,2.9554,0.191,1.0000|1.0000|1.0000|1.0000
+sensor_noise,4,1.0,0.0,0.0,0.0,0.0968,0.1381,3.0376,0.2042,1.0000|1.0000|1.0000|1.0000
+torque_limit,4,1.0,0.0,0.365,0.1168,0.0418,0.0539,1.7813,0.249,1.0000|1.0000|1.0000|1.0000

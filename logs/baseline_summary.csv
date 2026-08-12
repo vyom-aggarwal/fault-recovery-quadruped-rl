@@ -1,6 +1,0 @@
-fault_type,severity,n_trials,recovery_rate,n_recovered,recovery_time_mean_s,recovery_time_median_s,fall_rate,post_fault_distance_mean_m,steps_survived_mean,baseline_vel_mean
-actuation_delay,10,100,1.0,100,1.8167,1.8167,0.0,1.2849,300.0,0.5565
-joint_lock,1.0,100,1.0,100,0.0405,0.0167,0.0,2.2222,300.0,0.5565
-sensor_dropout,1.0,100,1.0,100,0.0167,0.0167,0.0,2.8319,300.0,0.5565
-sensor_noise,0.3,100,1.0,100,0.0167,0.0167,0.0,2.8278,300.0,0.5565
-torque_limit,0.2,100,1.0,100,0.0217,0.0167,0.55,1.5651,181.73,0.5565

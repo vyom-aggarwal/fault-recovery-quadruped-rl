@@ -12,7 +12,7 @@ import numpy as np
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
  
  
-def gait_check(model_path, steps=1000):
+def gait_check(model_path, steps=1000, target_velocity=0.5, tol=0.30):
     import pybullet as p
     from stable_baselines3 import PPO
     from envs.quadruped_env import QuadrupedFaultEnv
@@ -54,13 +54,15 @@ def gait_check(model_path, steps=1000):
     joint_range = float((joint_history.max(axis=0) - joint_history.min(axis=0)).mean()) \
         if len(joint_history) else 0.0
     contact_var = float(np.mean(np.diff(contact_counts) != 0)) if len(contact_counts) > 1 else 0.0
- 
-    # "Converged" = survived most of the episode AND actually translated forward.
-    # Both conditions matter. A policy can stand still forever (survives, no displacement) or lunge and fall (displacement, no survival).
-    converged = (steps_survived >= 0.9 * steps) and (speed >= 0.2)
+
+    survived = steps_survived >= 0.9 * steps
+    tracking_error = abs(speed - target_velocity) / target_velocity if target_velocity else 1.0
+    converged = survived and (tracking_error <= tol)
  
     return {
         "converged": bool(converged),
+        "survived_episode": bool(survived),
+        "tracking_error": round(tracking_error, 4),
         "steps_survived": int(steps_survived),
         "fell": bool(fell),
         "mean_speed_mps": round(speed, 4),
@@ -79,7 +81,7 @@ def run(cmd):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seeds", type=int, default=5, help="Number of seeds (0..N-1)")
-    parser.add_argument("--timesteps", type=int, default=500_000)
+    parser.add_argument("--timesteps", type=int, default=1_500_000)
     parser.add_argument("--n_envs", type=int, default=4)
     parser.add_argument("--ent_coef", type=float, default=0.01)
     parser.add_argument("--trials", type=int, default=100, help="Fault trials per fault type, per seed")
@@ -88,6 +90,16 @@ def main():
     parser.add_argument("--skip_training", action="store_true",
                         help="Evaluate existing policies without retraining")
     parser.add_argument("--gait_steps", type=int, default=1000)
+    parser.add_argument("--target_velocity", type=float, default=0.5,
+                        help="Commanded velocity the base policy was trained to track.")
+    parser.add_argument("--convergence_tol", type=float, default=0.30,
+                        help="A seed counts as converged only if it survives the episode AND "
+                             "tracks the commanded velocity within this fraction. The old "
+                             "criterion (speed >= 0.2 absolute) admitted policies running at "
+                             "60%% of target, whose fault responses are not comparable to "
+                             "on-target policies.")
+    parser.add_argument("--force_retrain", action="store_true",
+                        help="Retrain even if a model already exists at the target path.")
     parser.add_argument("--log_format", type=str, default="csv",
                         choices=["csv", "tensorboard", "none"],
                         help="Passed through to training. csv is the robust default.")
@@ -117,9 +129,32 @@ def main():
  
         # train 
         if not args.skip_training:
-            if os.path.exists(model_path + ".zip"):
-                print(f"[seed {seed}] {model_path}.zip already exists -- skipping training. "
-                      f"Delete it to force a retrain.")
+            existing_cfg_path = model_path + "_trainconfig.json"
+            stale = False
+            if os.path.exists(model_path + ".zip") and not args.force_retrain:
+                if os.path.exists(existing_cfg_path):
+                    with open(existing_cfg_path) as f:
+                        prev = json.load(f)
+                    mismatches = {k: (prev.get(k), v) for k, v in
+                                  (("timesteps", args.timesteps),
+                                   ("ent_coef", args.ent_coef),
+                                   ("n_envs", args.n_envs))
+                                  if prev.get(k) != v}
+                    if mismatches:
+                        stale = True
+                        print(f"[seed {seed}] EXISTING MODEL WAS TRAINED WITH DIFFERENT SETTINGS:")
+                        for k, (was, now) in mismatches.items():
+                            print(f"    {k}: existing={was}  requested={now}")
+                        print(f"  Mixing training budgets across seeds confounds the experiment.")
+                        print(f"  Retraining this seed with the requested settings.")
+                else:
+                    stale = True
+                    print(f"[seed {seed}] existing model has no _trainconfig.json -- provenance "
+                          f"unknown, so it cannot be trusted to match this batch. Retraining.")
+ 
+            if os.path.exists(model_path + ".zip") and not stale and not args.force_retrain:
+                print(f"[seed {seed}] {model_path}.zip already exists with matching settings "
+                      f"-- skipping training.")
             else:
                 ok = run([sys.executable, "scripts/train_base_policy.py",
                           "--seed", str(seed),
@@ -139,23 +174,27 @@ def main():
             manifest["seeds"][str(seed)] = {"status": "missing_model"}
             continue
  
-        # gait check 
+        # gait check
         print(f"\n[seed {seed}] checking whether the policy walks...")
         try:
-            gait = gait_check(model_path, steps=args.gait_steps)
+            gait = gait_check(model_path, steps=args.gait_steps,
+                              target_velocity=args.target_velocity,
+                              tol=args.convergence_tol)
         except Exception as exc:
             print(f"[seed {seed}] gait check errored: {exc}")
             manifest["seeds"][str(seed)] = {"status": "gait_check_failed", "error": str(exc)}
             continue
  
         status = "converged" if gait["converged"] else "NOT converged"
-        print(f"[seed {seed}] {status}: {gait['mean_speed_mps']} m/s, "
+        print(f"[seed {seed}] {status}: {gait['mean_speed_mps']} m/s "
+              f"(tracking error {gait['tracking_error']:.0%} vs {args.target_velocity} m/s target), "
               f"{gait['steps_survived']}/{args.gait_steps} steps, "
               f"joint range {gait['mean_joint_range_rad']} rad")
  
         manifest["seeds"][str(seed)] = {"status": "ok", "gait": gait,
                                         "model_path": model_path + ".zip"}
-
+ 
+        # A non-converged seed is a REPORTABLE RESULT (convergence rate), not a failure to hide, but we still skip the eval
         if not gait["converged"]:
             print(f"[seed {seed}] skipping fault evaluation -- policy did not learn to walk. "
                   f"This counts toward the reported convergence rate.")
@@ -163,7 +202,7 @@ def main():
                 json.dump(manifest, f, indent=2)
             continue
  
-        # fault evaluation
+        # ---- fault evaluation ------------------------------------------
         out_csv = os.path.join(seed_results_dir, "baseline_fault_results.csv")
         ok = run([sys.executable, "scripts/baseline_fault_eval.py",
                   "--model", model_path,
@@ -174,7 +213,7 @@ def main():
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=2)
  
-    # summary
+    # ---- summary -------------------------------------------------------
     elapsed_min = (time.time() - started) / 60.0
     ok_seeds = [s for s, v in manifest["seeds"].items() if v.get("status") == "ok"]
     converged = [s for s in ok_seeds if manifest["seeds"][s]["gait"]["converged"]]

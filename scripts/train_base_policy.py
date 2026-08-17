@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import sys
  
@@ -19,7 +20,10 @@ def make_env():
  
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--timesteps", type=int, default=500_000)
+    parser.add_argument("--timesteps", type=int, default=1_500_000,
+                        help="1.5M is the budget that produced a reliable gait. 500k "
+                             "undertrains: it yields slow, off-target policies and a "
+                             "lower convergence rate.")
     parser.add_argument("--n_envs", type=int, default=4, help="Parallel envs; keep small on a laptop CPU")
     parser.add_argument("--save_path", type=str, default="models/base_policy")
     parser.add_argument("--log_dir", type=str, default="logs/base_policy")
@@ -42,7 +46,7 @@ def main():
     os.makedirs(os.path.dirname(args.save_path) or ".", exist_ok=True)
     os.makedirs(args.log_dir, exist_ok=True)
  
-    # Guard against silently destroying a good policy by retraining over it.
+    # Guard against destroying a good policy by retraining over it.
     if os.path.exists(args.save_path + ".zip"):
         print(f"WARNING: {args.save_path}.zip already exists and will be OVERWRITTEN "
               f"when this run finishes. Ctrl+C now and pass a different --save_path "
@@ -70,6 +74,7 @@ def main():
         policy_kwargs=dict(net_arch=[128, 128]),
     )
  
+    # Configure logging AFTER construction so the format is explicit and the tensorboard writer thread is never created unless asked for.
     if args.log_format == "csv":
         model.set_logger(configure(args.log_dir, ["stdout", "csv"]))
         print(f"Logging to {os.path.join(args.log_dir, 'progress.csv')}")
@@ -85,6 +90,14 @@ def main():
  
     model.learn(total_timesteps=args.timesteps, callback=checkpoint_callback, progress_bar=True)
     model.save(args.save_path)
+ 
+    with open(args.save_path + "_trainconfig.json", "w") as f:
+        json.dump({
+            "timesteps": args.timesteps,
+            "n_envs": args.n_envs,
+            "ent_coef": args.ent_coef,
+            "seed": args.seed,
+        }, f, indent=2)
     print(f"Saved base policy to {args.save_path}.zip (seed={args.seed})")
  
  

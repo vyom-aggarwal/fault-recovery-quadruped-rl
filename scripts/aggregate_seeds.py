@@ -21,7 +21,6 @@ def _truthy(value):
 
 
 def per_seed_stats(csv_path):
-    # Collapse one seed's trial-level CSV into per-fault-type summary numbers.
     by_fault = defaultdict(list)
     with open(csv_path, newline="") as f:
         for row in csv.DictReader(f):
@@ -31,22 +30,33 @@ def per_seed_stats(csv_path):
     for fault_type, rows in by_fault.items():
         n = len(rows)
         rec_times = [_f(r["recovery_time_s"]) for r in rows]
-        recovered = [t for t in rec_times if t is not None]
+        recovered_times = [t for t in rec_times if t is not None]
         distances = [d for d in (_f(r["post_fault_distance_m"]) for r in rows) if d is not None]
+        drops = [d for d in (_f(r.get("velocity_drop_frac")) for r in rows) if d is not None]
         falls = [_truthy(r["fell"]) for r in rows]
+
+        # recovery_status is authoritative when present (new eval script)
+        statuses = [r.get("recovery_status", "") for r in rows]
+        has_status = any(statuses)
+        n_degraded = sum(1 for r in rows if _truthy(r.get("degraded", "")))
+        n_recovered = sum(1 for st in statuses if st == "recovered")
+        n_nodeg = sum(1 for st in statuses if st == "no_degradation")
 
         out[fault_type] = {
             "n_trials": n,
-            "recovery_rate": len(recovered) / n if n else 0.0,
+            "recovery_rate": (n_recovered / n_degraded) if (has_status and n_degraded)
+                             else (len(recovered_times) / n if n and not has_status else 0.0),
+            "degradation_rate": (n_degraded / n) if n else 0.0,
+            "no_degradation_rate": (n_nodeg / n) if (has_status and n) else None,
             "fall_rate": sum(falls) / n if n else 0.0,
-            "mean_recovery_time_s": statistics.mean(recovered) if recovered else None,
+            "mean_velocity_drop": statistics.mean(drops) if drops else None,
+            "mean_recovery_time_s": statistics.mean(recovered_times) if recovered_times else None,
             "mean_post_fault_distance_m": statistics.mean(distances) if distances else None,
         }
     return out
 
 
 def summarize(values):
-    # mean, sd, n over the non-None values -- sd is None when n<2.
     vals = [v for v in values if v is not None]
     if not vals:
         return None, None, 0
@@ -79,7 +89,7 @@ def main():
         print("Run scripts/run_multiseed.py first.")
         return
 
-    # convergence rate from the manifest, if present
+    # ---- convergence rate from the manifest, if present -----------------
     manifest_path = os.path.join(args.results_dir, "manifest.json")
     if os.path.exists(manifest_path):
         with open(manifest_path) as f:
@@ -124,6 +134,8 @@ def main():
         print(f"--- {fault_type} ---")
 
         rec_rates = [all_seeds[s].get(fault_type, {}).get("recovery_rate") for s in seed_labels]
+        deg_rates = [all_seeds[s].get(fault_type, {}).get("degradation_rate") for s in seed_labels]
+        drops = [all_seeds[s].get(fault_type, {}).get("mean_velocity_drop") for s in seed_labels]
         fall_rates = [all_seeds[s].get(fault_type, {}).get("fall_rate") for s in seed_labels]
         rec_times = [all_seeds[s].get(fault_type, {}).get("mean_recovery_time_s") for s in seed_labels]
         dists = [all_seeds[s].get(fault_type, {}).get("mean_post_fault_distance_m") for s in seed_labels]
@@ -133,7 +145,13 @@ def main():
         rt_m, rt_sd, _ = summarize(rec_times)
         d_m, d_sd, _ = summarize(dists)
 
-        print(f"  Recovery rate       : {fmt(rr_m, rr_sd, pct=True)}   (n={rr_n} seeds)")
+        dg_m, dg_sd, _ = summarize(deg_rates)
+        dr_m, dr_sd, _ = summarize(drops)
+        print(f"  Degradation rate    : {fmt(dg_m, dg_sd, pct=True)}   "
+              f"(fault measurably slowed the robot)")
+        print(f"  Velocity drop       : {fmt(dr_m, dr_sd, pct=True)}   (mean worst-case)")
+        print(f"  Recovery rate       : {fmt(rr_m, rr_sd, pct=True)}   "
+              f"(of DEGRADED trials; n={rr_n} seeds)")
         print(f"  Fall rate           : {fmt(fr_m, fr_sd, pct=True)}")
         print(f"  Recovery time       : {fmt(rt_m, rt_sd)} s")
         print(f"  Post-fault distance : {fmt(d_m, d_sd)} m")
@@ -157,6 +175,8 @@ def main():
             "n_seeds": rr_n,
             "recovery_rate_mean": round(rr_m, 4) if rr_m is not None else "",
             "recovery_rate_sd": round(rr_sd, 4) if rr_sd is not None else "",
+            "degradation_rate_mean": round(dg_m, 4) if dg_m is not None else "",
+            "velocity_drop_mean": round(dr_m, 4) if dr_m is not None else "",
             "fall_rate_mean": round(fr_m, 4) if fr_m is not None else "",
             "fall_rate_sd": round(fr_sd, 4) if fr_sd is not None else "",
             "recovery_time_mean_s": round(rt_m, 4) if rt_m is not None else "",
@@ -189,7 +209,7 @@ def main():
     print("hypothesis: held-out faults should have real headroom AND be")
     print("structurally different from the training faults (physics vs. sensor).")
 
-    # write machine-readable summary
+    # write machine-readble summary
     if rows_out:
         os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
         with open(args.out, "w", newline="") as f:

@@ -35,7 +35,7 @@ def per_seed_stats(csv_path):
         drops = [d for d in (_f(r.get("velocity_drop_frac")) for r in rows) if d is not None]
         falls = [_truthy(r["fell"]) for r in rows]
 
-        # recovery_status is authoritative when present (new eval script)
+        # recovery_status is authoritative when present
         statuses = [r.get("recovery_status", "") for r in rows]
         has_status = any(statuses)
         n_degraded = sum(1 for r in rows if _truthy(r.get("degraded", "")))
@@ -44,6 +44,7 @@ def per_seed_stats(csv_path):
 
         out[fault_type] = {
             "n_trials": n,
+            # Conditional recovery rate
             "recovery_rate": (n_recovered / n_degraded) if (has_status and n_degraded)
                              else (len(recovered_times) / n if n and not has_status else 0.0),
             "degradation_rate": (n_degraded / n) if n else 0.0,
@@ -89,7 +90,44 @@ def main():
         print("Run scripts/run_multiseed.py first.")
         return
 
-    # ---- convergence rate from the manifest, if present -----------------
+    manifest_path = os.path.join(args.results_dir, "manifest.json")
+    manifest = {}
+    if os.path.exists(manifest_path):
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+
+    seeds_meta = manifest.get("seeds", {})
+    if seeds_meta:
+        kept, excluded = [], []
+        for path in csv_paths:
+            label = os.path.basename(os.path.dirname(path))      # "seed_3"
+            num = label.split("_")[-1]
+            info = seeds_meta.get(num, {})
+            if info.get("gait", {}).get("converged"):
+                kept.append(path)
+            else:
+                reason = info.get("gait", {}).get("failure_mode") or info.get("status") or "not in manifest"
+                excluded.append((label, reason))
+
+        if excluded:
+            print("=" * 78)
+            print("EXCLUDED FROM ANALYSIS (failed the convergence screen)")
+            print("=" * 78)
+            for label, reason in excluded:
+                print(f"  {label}: {reason}")
+            print("  These result files are stale -- from a run under a different")
+            print("  criterion. They are ignored here; delete them to avoid confusion.\n")
+        csv_paths = kept
+
+        if not csv_paths:
+            print("ERROR: no CONVERGED seeds have results. Nothing to analyze.")
+            return
+    else:
+        print(f"WARNING: no manifest at {manifest_path} -- cannot verify which seeds")
+        print("converged, so ALL result files are being included. Any non-converged")
+        print("seed present will contaminate these numbers.\n")
+
+    # convergence rate from the manifest, if present
     manifest_path = os.path.join(args.results_dir, "manifest.json")
     if os.path.exists(manifest_path):
         with open(manifest_path) as f:
@@ -113,7 +151,7 @@ def main():
             print("  problem to hide. State it in the paper -- it characterizes how")
             print("  reliably the training setup produces a usable policy.")
 
-    # per-seed, then across-seed
+    # per-seed, then across-seed 
     all_seeds = {}
     for path in csv_paths:
         seed_label = os.path.basename(os.path.dirname(path))
@@ -162,6 +200,7 @@ def main():
         )
         print(f"  per-seed recovery   : {per_seed_str}")
 
+        # Flag effects that rest on one seed
         clean = [v for v in rec_rates if v is not None]
         if len(clean) > 2:
             spread = max(clean) - min(clean)
@@ -187,7 +226,7 @@ def main():
                 f"{v:.4f}" if v is not None else "" for v in rec_rates),
         })
 
-    # headroom analysis
+    # headroom analysis 
     print("=" * 78)
     print("HEADROOM FOR AN ADAPTATION METHOD")
     print("=" * 78)
@@ -209,7 +248,7 @@ def main():
     print("hypothesis: held-out faults should have real headroom AND be")
     print("structurally different from the training faults (physics vs. sensor).")
 
-    # write machine-readble summary
+    # write 
     if rows_out:
         os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
         with open(args.out, "w", newline="") as f:

@@ -1,6 +1,6 @@
-fault_type,n_seeds,recovery_rate_mean,recovery_rate_sd,fall_rate_mean,fall_rate_sd,recovery_time_mean_s,recovery_time_sd_s,post_fault_distance_mean_m,post_fault_distance_sd_m,per_seed_recovery_rates
-actuation_delay,4,1.0,0.0,0.0,0.0,0.05,0.0892,1.6382,0.0977,1.0000|1.0000|1.0000|1.0000
-joint_lock,4,1.0,0.0,0.0,0.0,0.1615,0.2584,2.2659,0.2617,1.0000|1.0000|1.0000|1.0000
-sensor_dropout,4,1.0,0.0,0.0,0.0,0.047,0.0581,2.9554,0.191,1.0000|1.0000|1.0000|1.0000
-sensor_noise,4,1.0,0.0,0.0,0.0,0.0968,0.1381,3.0376,0.2042,1.0000|1.0000|1.0000|1.0000
-torque_limit,4,1.0,0.0,0.365,0.1168,0.0418,0.0539,1.7813,0.249,1.0000|1.0000|1.0000|1.0000
+fault_type,n_seeds,recovery_rate_mean,recovery_rate_sd,degradation_rate_mean,velocity_drop_mean,fall_rate_mean,fall_rate_sd,recovery_time_mean_s,recovery_time_sd_s,post_fault_distance_mean_m,post_fault_distance_sd_m,per_seed_recovery_rates
+actuation_delay,7,0.0,0.0,1.0,0.9842,0.0,0.0,,,1.5595,0.2019,0.0000|0.0000|0.0000|0.0000|0.0000|0.0000|0.0000
+joint_lock,7,0.5268,0.1794,0.8286,0.4008,0.0,0.0,2.1786,0.5846,2.3699,0.2363,0.4945|0.3939|0.6374|0.7604|0.4778|0.6818|0.2418
+sensor_dropout,7,0.6976,0.3343,0.82,0.2235,0.0,0.0,2.0772,0.9402,3.0207,0.1709,0.9333|0.0000|0.9100|0.9100|0.5532|0.8100|0.7667
+sensor_noise,7,0.7435,0.3319,0.7157,0.1679,0.0,0.0,2.2267,0.451,3.1082,0.174,0.8804|0.0000|0.8511|0.7818|0.9468|0.9012|0.8434
+torque_limit,7,0.3535,0.1582,0.8614,0.4732,0.3443,0.0995,1.8635,0.6183,1.8525,0.2059,0.3900|0.0000|0.3889|0.3889|0.4500|0.4500|0.4066
